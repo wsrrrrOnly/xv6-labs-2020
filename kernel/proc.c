@@ -121,6 +121,28 @@ found:
     return 0;
   }
 
+  // Create a new kernel page table for this process
+  p->kernelpt = proc_kpt_init();
+  if(p->kernelpt == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // Allocate and map kernel stack
+  char *pa = kalloc();
+  if(pa == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  uint64 va = KSTACK((int)(p - proc));
+  uvmmap(p->kernelpt, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+
+  //也要映射 trapframe
+  uvmmap(p->kernelpt, TRAPFRAME, (uint64)(p->trapframe), PGSIZE, PTE_R | PTE_W);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -136,12 +158,24 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  if(p->kstack){
+    uvmunmap(p->kernelpt, p->kstack, 1, 1); // 释放内核栈
+    p->kstack = 0;
+  }
+
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  // 释放整个内核页表（类似 freewalk）
+
+  safe_free_kernelpt(p->kernelpt);
+  p->kernelpt = 0;
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;

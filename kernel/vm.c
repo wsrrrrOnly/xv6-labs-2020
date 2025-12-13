@@ -15,10 +15,56 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+// Free a per-process kernel page table structure,
+// but DO NOT free physical pages pointed by leaf PTEs
+// (since they are shared kernel pages like code, UART, etc.)
+void
+safe_free_kernelpt(pagetable_t pagetable)
+{
+  // Recursively free page-table pages only
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // Points to next-level page table
+      uint64 child = PTE2PA(pte);
+      safe_free_kernelpt((pagetable_t)child);
+    }
+    // If it's a leaf (PTE_R/W/X set), do NOT kfree its pa!
+    // Just leave it — it's a shared kernel page.
+  }
+  kfree((void*)pagetable);
+}
 
 
+// kernel/vm.c
+void
+uvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(pagetable, va, sz, pa, perm) != 0)
+    panic("uvmmap");
+}
 
+pagetable_t
+proc_kpt_init()
+{
+  pagetable_t kpt = uvmcreate();
+  if(kpt == 0) return 0;
 
+  // 设备映射（和 kvminit 一致）
+  uvmmap(kpt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  uvmmap(kpt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  uvmmap(kpt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  uvmmap(kpt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // 内核代码和数据
+  uvmmap(kpt, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+  uvmmap(kpt, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+
+  // 每个进程必须有自己的 trampoline 映射
+  uvmmap(kpt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kpt;
+}
 
 // Helper function to recursively print page table entries.
 void
