@@ -15,6 +15,43 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+
+
+
+
+
+// Helper function to recursively print page table entries.
+void
+_vmprint(pagetable_t pagetable, int level)
+{
+  // There are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V){
+      // Print indentation: ".. .. .."
+      for(int j = 0; j < level; j++){
+        if(j > 0) printf(" ");
+        printf("..");
+      }
+      uint64 pa = PTE2PA(pte);
+      printf("%d: pte %p pa %p\n", i, pte, pa);
+      // If this PTE points to a next-level page table (not a leaf)
+      if((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+        _vmprint((pagetable_t)pa, level + 1);
+      }
+    }
+  }
+}
+
+// Public function to print the entire page table.
+void
+vmprint(pagetable_t pagetable)
+{
+  printf("page table %p\n", pagetable);
+  _vmprint(pagetable, 1);
+}
+
+
 /*
  * create a direct-map page table for the kernel.
  */
