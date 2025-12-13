@@ -8,10 +8,21 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+
+// >>> 新增：Page Table Lab 替换 <<<
+#ifdef LAB_PGTBL
+int copyin_new(pagetable_t, char *, uint64, uint64);
+int copyinstr_new(pagetable_t, char *, uint64, uint64);
+#define copyin copyin_new
+#define copyinstr copyinstr_new
+#endif
+
 #ifdef LAB_NET
 struct mbuf;
 struct sock;
 #endif
+
+
 
 // bio.c
 void            binit(void);
@@ -157,7 +168,9 @@ void            uartputc(int);
 void            uartputc_sync(int);
 int             uartgetc(void);
 
+
 // vm.c
+void u2kvmcopy(pagetable_t, pagetable_t, uint64, uint64);
 void            safe_free_kernelpt(pagetable_t);
 pagetable_t     proc_kpt_init(void);
 void            kvminit(void);
@@ -180,8 +193,6 @@ void            uvmunmap(pagetable_t, uint64, uint64, int);
 void            uvmclear(pagetable_t, uint64);
 uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
-int             copyin(pagetable_t, char *, uint64, uint64);
-int             copyinstr(pagetable_t, char *, uint64, uint64);
 void            vmprint(pagetable_t);
 
 // plic.c

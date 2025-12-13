@@ -4,7 +4,7 @@
 #include "defs.h"
 #include "spinlock.h"
 #include "proc.h"
-
+pte_t *walk(pagetable_t, uint64, int);
 //
 // This file contains copyin_new() and copyinstr_new(), the
 // replacements for copyin and coyinstr in vm.c.
@@ -29,12 +29,35 @@ statscopyin(char *buf, int sz) {
 int
 copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  struct proc *p = myproc();
 
-  if (srcva >= p->sz || srcva+len >= p->sz || srcva+len < srcva)
-    return -1;
-  memmove((void *) dst, (void *)srcva, len);
-  stats.ncopyin++;   // XXX lock
+  stats.ncopyin++;
+  uint64 n, offset;
+  char *pa;
+
+    // 在 copyin_new 开头
+  if (srcva >= MAXVA || srcva + len > MAXVA || srcva + len < srcva) {
+      return -1;
+  }
+  while (len > 0) {
+    // 找到当前页的起始虚拟地址
+    uint64 va = PGROUNDDOWN(srcva);
+    pte_t *pte = walk(pagetable, va, 0);
+    if (!pte || (*pte & PTE_V) == 0)
+      return -1;  // 页未映射或无效
+
+    pa = (char*)PTE2PA(*pte);        // 物理地址
+    offset = srcva - va;             // 页内偏移
+    n = PGSIZE - offset;             // 当前页剩余字节数
+    if (n > len)
+      n = len;
+
+    memmove(dst, pa + offset, n);
+
+    dst += n;
+    srcva += n;
+    len -= n;
+  }
+
   return 0;
 }
 
@@ -45,14 +68,39 @@ copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  struct proc *p = myproc();
-  char *s = (char *) srcva;
-  
-  stats.ncopyinstr++;   // XXX lock
-  for(int i = 0; i < max && srcva + i < p->sz; i++){
-    dst[i] = s[i];
-    if(s[i] == '\0')
-      return 0;
+
+  stats.ncopyinstr++;
+
+  uint64 offset;
+  char *pa;
+  int tot = 0;
+
+
+  if (srcva >= MAXVA || srcva >= MAXVA - max) {
+    return -1;
   }
-  return -1;
+  while (tot < max) {
+    uint64 va = PGROUNDDOWN(srcva);
+    pte_t *pte = walk(pagetable, va, 0);
+    if (!pte || (*pte & PTE_V) == 0)
+      return -1;
+
+    pa = (char*)PTE2PA(*pte);
+    offset = srcva - va;
+
+    // 如果字符串跨页，最多读到页尾
+    uint64 n = PGSIZE - offset;
+    if (tot + n > max)
+      n = max - tot;
+
+    for (uint64 i = 0; i < n; i++) {
+      dst[tot] = pa[offset + i];
+      if (dst[tot] == '\0')
+        return 0;  // 成功找到 \0
+      tot++;
+      srcva++;
+    }
+  }
+
+  return -1;  // 未找到 \0
 }
