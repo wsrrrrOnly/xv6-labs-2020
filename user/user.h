@@ -41,3 +41,5 @@ int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
 int backtrace(void);
+int sigalarm(int ticks, void (*handler)());
+int sigreturn(void);

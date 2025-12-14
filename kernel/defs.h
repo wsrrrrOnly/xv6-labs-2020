@@ -188,3 +188,5 @@ void            virtio_disk_intr(void);
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 
 uint64 sys_backtrace(void);
+uint64 sys_sigalarm(void);
+uint64 sys_sigreturn(void);

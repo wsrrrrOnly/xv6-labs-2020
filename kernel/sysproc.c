@@ -103,3 +103,30 @@ sys_backtrace(void)
   backtrace();
   return 0;
 }
+
+
+uint64
+sys_sigalarm(void)
+{
+  int interval;
+  uint64 handler;
+
+  if(argint(0, &interval) < 0 || argaddr(1, &handler) < 0)
+    return -1;
+
+  struct proc *p = myproc();
+  p->alarm_interval = interval;
+  p->alarm_handler = (void (*)())handler;
+  p->ticks_count = 0;   // 重置计数器
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  // 恢复原始 trapframe
+  memmove(p->trapframe, p->alarm_trapframe, sizeof(struct trapframe));
+  p->is_alarming = 0;
+  return 0;
+}
