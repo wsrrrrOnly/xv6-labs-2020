@@ -41,18 +41,34 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
   int n;
-
   if(argint(0, &n) < 0)
     return -1;
 
-  addr = myproc()->sz;
+  struct proc *p = myproc();
+  uint64 old_sz = p->sz;
 
-  // lazy allocation
-  myproc()->sz += n;
+  if (n > 0) {
+    // Lazy: just increase sz
+    p->sz = old_sz + n;
+  } else if (n < 0) {
+    // Shrink heap
+    uint64 new_sz = old_sz + n;  // sign-extend n
+    if (new_sz >= old_sz || new_sz < 0) {
+      // Underflow or invalid
+      return -1;
+    }
 
-  return addr;
+    // Unmap pages from PGROUNDUP(new_sz) to old_sz
+    uint64 start = PGROUNDUP(new_sz);
+    if (start < old_sz) {
+      uvmunmap(p->pagetable, start, (old_sz - start) / PGSIZE, 1);
+    }
+    p->sz = new_sz;
+  }
+  // n == 0: do nothing
+
+  return old_sz;
 }
 
 uint64

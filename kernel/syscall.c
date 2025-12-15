@@ -68,6 +68,27 @@ int
 argaddr(int n, uint64 *ip)
 {
   *ip = argraw(n);
+  struct proc *p = myproc();
+
+  // Check bounds first
+  if (*ip >= p->sz) {
+    return -1;
+  }
+
+  // If not mapped, allocate on demand
+  if (walkaddr(p->pagetable, *ip) == 0) {
+    char *pa = kalloc();
+    if (pa == 0) {
+      return -1;
+    }
+    memset(pa, 0, PGSIZE);
+    // Again: NO PTE_X!
+    if (mappages(p->pagetable, PGROUNDDOWN(*ip), PGSIZE, (uint64)pa, PTE_U | PTE_R | PTE_W) < 0) {
+      kfree(pa);
+      return -1;
+    }
+  }
+
   return 0;
 }
 

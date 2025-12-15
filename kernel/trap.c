@@ -71,10 +71,7 @@ usertrap(void)
     // Handle page fault (load or store)
     uint64 fault_va = r_stval();  // virtual address that caused the fault
 
-    // Check if the faulting address is within valid range:
-    // - Above the user stack (stack grows downward, so top is PGROUNDUP(sp)-1)
-    // - Below the current process size (p->sz)
-    if(fault_va >= p->sz || fault_va < PGROUNDUP(p->trapframe->sp)) {
+    if(fault_va >= p->sz) {
       // Invalid memory access: kill the process
       p->killed = 1;
     } else {
