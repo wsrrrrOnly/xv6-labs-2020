@@ -67,7 +67,34 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    // Handle page fault (load or store)
+    uint64 fault_va = r_stval();  // virtual address that caused the fault
+
+    // Check if the faulting address is within valid range:
+    // - Above the user stack (stack grows downward, so top is PGROUNDUP(sp)-1)
+    // - Below the current process size (p->sz)
+    if(fault_va >= p->sz || fault_va < PGROUNDUP(p->trapframe->sp)) {
+      // Invalid memory access: kill the process
+      p->killed = 1;
+    } else {
+      // Allocate a physical page on demand
+      char *pa = kalloc();
+      if(pa == 0) {
+        // Out of memory
+        p->killed = 1;
+      } else {
+        // Zero-fill the new page
+        memset(pa, 0, PGSIZE);
+        // Map it into the user page table at the page-aligned fault address
+        if(mappages(p->pagetable, PGROUNDDOWN(fault_va), PGSIZE, (uint64)pa, PTE_U | PTE_R | PTE_W) < 0) {
+          kfree(pa);  // Failed to map, free the physical page
+          p->killed = 1;
+        }
+        // Success: page is now mapped, continue execution
+      }
+    }
+  }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
