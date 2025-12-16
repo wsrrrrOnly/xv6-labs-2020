@@ -70,20 +70,28 @@ argaddr(int n, uint64 *ip)
   *ip = argraw(n);
   struct proc *p = myproc();
 
-  // Check bounds first
+  // 地址不能 >= sz
   if (*ip >= p->sz) {
     return -1;
   }
 
-  // If not mapped, allocate on demand
+  // 地址不能太低（防止分配 text 前的空洞）
+  // 注意：栈在高地址，所以低地址只要 < sz 且 >= 0 理论上可分配
+  // 但 validatetest 会传入 0x1000 这种，我们允许，但必须确保不重复分配
+
+  // 如果尚未映射，则分配
   if (walkaddr(p->pagetable, *ip) == 0) {
+    // 再次确认地址合理（可选）
+    if (*ip < 0) {
+      return -1;
+    }
+
     char *pa = kalloc();
     if (pa == 0) {
       return -1;
     }
     memset(pa, 0, PGSIZE);
-    // Again: NO PTE_X!
-    if (mappages(p->pagetable, PGROUNDDOWN(*ip), PGSIZE, (uint64)pa, PTE_U | PTE_R | PTE_W) < 0) {
+    if (mappages(p->pagetable, PGROUNDDOWN(*ip), PGSIZE, (uint64)pa, PTE_U | PTE_R | PTE_W) != 0) {
       kfree(pa);
       return -1;
     }

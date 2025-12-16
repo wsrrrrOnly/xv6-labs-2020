@@ -68,26 +68,27 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else if(r_scause() == 13 || r_scause() == 15) {
-    // Handle page fault (load or store)
-    uint64 fault_va = r_stval();  // virtual address that caused the fault
+     uint64 fault_va = r_stval();
+  struct proc *p = myproc();
 
-    if(fault_va >= p->sz) {
-      // Invalid memory access: kill the process
-      p->killed = 1;
+  // 地址超出进程空间：非法
+  if (fault_va >= p->sz) {
+    p->killed = 1;
+  }
+  // 地址太低（可选加强检查，但非必须）
+  else if (fault_va < 0) {
+    p->killed = 1;
+  }
+  else if (walkaddr(p->pagetable, fault_va) == 0) {
+    char *pa = kalloc();
+    if (pa == 0) {
+      p->killed = 1;  // Out of memory
     } else {
-      // Allocate a physical page on demand
-      char *pa = kalloc();
-      if(pa == 0) {
-        // Out of memory
+      memset(pa, 0, PGSIZE);
+      if (mappages(p->pagetable, PGROUNDDOWN(fault_va), PGSIZE, (uint64)pa, PTE_U | PTE_R | PTE_W) < 0) {
+        kfree(pa);
         p->killed = 1;
-      } else {
-        // Zero-fill the new page
-        memset(pa, 0, PGSIZE);
-        // Map it into the user page table at the page-aligned fault address
-        if(mappages(p->pagetable, PGROUNDDOWN(fault_va), PGSIZE, (uint64)pa, PTE_U | PTE_R | PTE_W) < 0) {
-          kfree(pa);  // Failed to map, free the physical page
-          p->killed = 1;
-        }
+      }
         // Success: page is now mapped, continue execution
       }
     }
@@ -101,8 +102,10 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2) {
     yield();
+  }
 
   usertrapret();
 }

@@ -156,8 +156,10 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
-      panic("remap");
+    if(*pte & PTE_V) {
+      // 地址已映射：返回错误，不要 panic！
+      return -1;   // ← 修改这里
+    }
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
