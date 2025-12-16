@@ -23,32 +23,53 @@
 #include "fs.h"
 #include "buf.h"
 
-struct {
-  struct spinlock lock;
-  struct buf buf[NBUF];
+// 哈希桶数量（建议使用素数）
+#define NBUCKET 13
+#define HASH(blockno) ((blockno) % NBUCKET)
 
-  // Linked list of all buffers, through prev/next.
-  // Sorted by how recently the buffer was used.
-  // head.next is most recent, head.prev is least.
-  struct buf head;
+struct hashbuf {
+  struct buf head;       // 双向链表头节点（哨兵）
+  struct spinlock lock;  // 每个桶独立的自旋锁
+};
+
+
+struct {
+  struct spinlock alloc_lock; 
+  struct buf buf[NBUF];
+  struct hashbuf buckets[NBUCKET];
 } bcache;
+
 
 void
 binit(void)
 {
   struct buf *b;
+  char lockname[16];
 
-  initlock(&bcache.lock, "bcache");
+  initlock(&bcache.alloc_lock, "bcache_alloc");
 
-  // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
-  for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
+  // 初始化所有哈希桶
+  for (int i = 0; i < NBUCKET; i++) {
+    snprintf(lockname, sizeof(lockname), "bcache_%d", i);
+    initlock(&bcache.buckets[i].lock, lockname);
+
+    // 初始化双向链表：head 自环
+    bcache.buckets[i].head.prev = &bcache.buckets[i].head;
+    bcache.buckets[i].head.next = &bcache.buckets[i].head;
+  }
+
+  // 将所有缓冲区初始挂到 bucket[0]（任意桶均可，启动时未分配）
+  for (b = bcache.buf; b < bcache.buf + NBUF; b++) {
     initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+
+    // 头插法插入到 bucket[0]
+    b->next = bcache.buckets[0].head.next;
+    b->prev = &bcache.buckets[0].head;
+    bcache.buckets[0].head.next->prev = b;
+    bcache.buckets[0].head.next = b;
+
+    // 初始化时间戳（可选，设为0）
+    b->timestamp = 0;
   }
 }
 
@@ -58,34 +79,91 @@ binit(void)
 static struct buf*
 bget(uint dev, uint blockno)
 {
-  struct buf *b;
+  int bid = HASH(blockno);
 
-  acquire(&bcache.lock);
+  acquire(&bcache.buckets[bid].lock);
 
-  // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
-    if(b->dev == dev && b->blockno == blockno){
+  // 1. 查找是否已缓存
+  for (struct buf *b = bcache.buckets[bid].head.next;
+       b != &bcache.buckets[bid].head; b = b->next) {
+    if (b->dev == dev && b->blockno == blockno) {
       b->refcnt++;
-      release(&bcache.lock);
+      acquire(&tickslock);
+      b->timestamp = ticks;
+      release(&tickslock);
+      release(&bcache.buckets[bid].lock);
       acquiresleep(&b->lock);
       return b;
     }
   }
 
-  // Not cached.
-  // Recycle the least recently used (LRU) unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-    if(b->refcnt == 0) {
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
-      release(&bcache.lock);
+  // 2. 未命中：释放桶锁，准备串行化分配
+  release(&bcache.buckets[bid].lock);
+
+  // 3. 获取全局分配锁（串行化）
+  acquire(&bcache.alloc_lock);
+
+  // 4. 重新获取桶锁
+  acquire(&bcache.buckets[bid].lock);
+
+  // 🔑 5. 二次检查：是否已被别人加载？
+  for (struct buf *b = bcache.buckets[bid].head.next;
+       b != &bcache.buckets[bid].head; b = b->next) {
+    if (b->dev == dev && b->blockno == blockno) {
+      b->refcnt++;
+      acquire(&tickslock);
+      b->timestamp = ticks;
+      release(&tickslock);
+      release(&bcache.buckets[bid].lock);
+      release(&bcache.alloc_lock);
       acquiresleep(&b->lock);
       return b;
     }
   }
-  panic("bget: no buffers");
+
+  // 6. 分配 victim（在 alloc_lock 保护下，安全遍历）
+  struct buf *victim = 0;
+  for (int i = 0; i < NBUCKET; i++) {
+    for (struct buf *b = bcache.buckets[i].head.next;
+         b != &bcache.buckets[i].head; b = b->next) {
+      if (b->refcnt == 0) {
+        if (victim == 0 || b->timestamp < victim->timestamp) {
+          victim = b;
+        }
+      }
+    }
+  }
+
+  if (victim == 0)
+    panic("bget: no buffers");
+
+  // 7. 如果 victim 不在目标桶，迁移它
+  int victim_bid = HASH(victim->blockno);
+  if (victim_bid != bid) {
+    // 从原桶移除
+    victim->next->prev = victim->prev;
+    victim->prev->next = victim->next;
+
+    // 插入到目标桶
+    victim->next = bcache.buckets[bid].head.next;
+    victim->prev = &bcache.buckets[bid].head;
+    bcache.buckets[bid].head.next->prev = victim;
+    bcache.buckets[bid].head.next = victim;
+  }
+
+  // 8. 初始化
+  victim->dev = dev;
+  victim->blockno = blockno;
+  victim->valid = 0;
+  victim->refcnt = 1;
+  acquire(&tickslock);
+  victim->timestamp = ticks;
+  release(&tickslock);
+
+  release(&bcache.buckets[bid].lock);
+  release(&bcache.alloc_lock);
+  acquiresleep(&victim->lock);
+  return victim;
 }
 
 // Return a locked buf with the contents of the indicated block.
@@ -116,38 +194,34 @@ bwrite(struct buf *b)
 void
 brelse(struct buf *b)
 {
-  if(!holdingsleep(&b->lock))
+  if (!holdingsleep(&b->lock))
     panic("brelse");
 
   releasesleep(&b->lock);
 
-  acquire(&bcache.lock);
+  int bid = HASH(b->blockno);
+  acquire(&bcache.buckets[bid].lock);
   b->refcnt--;
-  if (b->refcnt == 0) {
-    // no one is waiting for it.
-    b->next->prev = b->prev;
-    b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
-  }
-  
-  release(&bcache.lock);
+
+  acquire(&tickslock);
+  b->timestamp = ticks;
+  release(&tickslock);
+
+  release(&bcache.buckets[bid].lock);
 }
 
 void
 bpin(struct buf *b) {
-  acquire(&bcache.lock);
+  int bid = HASH(b->blockno);
+  acquire(&bcache.buckets[bid].lock);
   b->refcnt++;
-  release(&bcache.lock);
+  release(&bcache.buckets[bid].lock);
 }
 
 void
 bunpin(struct buf *b) {
-  acquire(&bcache.lock);
+  int bid = HASH(b->blockno);
+  acquire(&bcache.buckets[bid].lock);
   b->refcnt--;
-  release(&bcache.lock);
+  release(&bcache.buckets[bid].lock);
 }
-
-
