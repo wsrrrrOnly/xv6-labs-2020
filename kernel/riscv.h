@@ -327,6 +327,7 @@ sfence_vma()
 #define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
 
 #define PTE_V (1L << 0) // valid
+#define PTE_F (1L << 8)  // Fork/Copy-on-Write 标记
 #define PTE_R (1L << 1)
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)

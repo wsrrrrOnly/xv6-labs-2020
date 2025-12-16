@@ -1,0 +1,8 @@
+1. How is the trap handled when a user process makes a system call?
+   When a user process executes ecall, the CPU switches to supervisor mode and jumps to the trampoline page's vector (stvec). The trap is handled by uservec and usertrap in kernel/trap.c. The system call number is read from a7, and the corresponding function in syscalls[] is invoked. Finally, usertrapret sets sepc to p->trapframe->epc + 4 and returns via sret.
+
+2. What happens if a user process divides by zero?
+   On RISC-V, division by zero does not cause a hardware exception. Instead, the result is zero. So the process continues normally. (Note: This is different from x86.)
+
+3. Why can't the kernel trust the epc saved in the trapframe when returning from a system call?
+   Because the user could have maliciously modified the trapframe in memory before making the system call. The kernel must use its own copy of the return address (stored in p->trapframe->epc, which is filled by the kernel on entry) to ensure control flow integrity.
