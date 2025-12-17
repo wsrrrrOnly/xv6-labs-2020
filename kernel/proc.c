@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h" 
 
 struct cpu cpus[NCPU];
 
@@ -113,6 +114,9 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+
+// 初始化 VMA 数组
+  memset(&p->vma, 0, sizeof(p->vma));
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -296,6 +300,16 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+    // === 新增：复制 VMA ===
+  #ifdef LAB_MMAP
+    for(i = 0; i < NVMA; i++) {
+      if(p->vma[i].used) {
+        np->vma[i] = p->vma[i];
+        filedup(p->vma[i].vfile);  // 增加引用
+      }
+    }
+  #endif
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -352,6 +366,22 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+    // === 新增：清理 mmap 区域 ===
+  #ifdef LAB_MMAP
+    for(int i = 0; i < NVMA; i++) {
+      if(p->vma[i].used) {
+        // 写回共享可写区域
+        if(p->vma[i].flags == MAP_SHARED && (p->vma[i].prot & PROT_WRITE)) {
+          filewrite(p->vma[i].vfile, p->vma[i].addr, p->vma[i].len);
+        }
+        fileclose(p->vma[i].vfile);
+        uvmunmap(p->pagetable, p->vma[i].addr, p->vma[i].len / PGSIZE, 1);
+        p->vma[i].used = 0;
+      }
+    }
+  #endif
+
 
   begin_op();
   iput(p->cwd);

@@ -484,3 +484,113 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int length, prot, flags, offset, fd;
+  struct file *f;
+  uint64 err = 0xffffffffffffffff;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 ||
+     argint(2, &prot) < 0 || argint(3, &flags) < 0 ||
+     argfd(4, &fd, &f) < 0 || argint(5, &offset) < 0)
+    return err;
+
+  // 实验简化：addr 和 offset 必须为 0，length > 0
+  if(addr != 0 || offset != 0 || length <= 0)
+    return err;
+
+  // MAP_SHARED + PROT_WRITE 时，文件必须可写
+  if(flags == MAP_SHARED && (prot & PROT_WRITE) && !f->writable)
+    return err;
+
+  struct proc *p = myproc();
+
+  // 检查虚拟地址空间是否足够
+  if(p->sz + length > MAXVA)
+    return err;
+
+  // 查找空闲 VMA 槽
+  for(int i = 0; i < NVMA; i++) {
+    if(p->vma[i].used == 0) {
+      p->vma[i].used = 1;
+      p->vma[i].addr = p->sz;
+      p->vma[i].len = length;
+      p->vma[i].prot = prot;
+      p->vma[i].flags = flags;
+      p->vma[i].vfile = f;
+      p->vma[i].vfd = fd;
+      p->vma[i].offset = offset;
+
+      filedup(f);  // 增加引用计数
+
+      p->sz += length;
+      return p->vma[i].addr;
+    }
+  }
+
+  return err;  // 无空闲 VMA
+}
+
+// kernel/sysfile.c
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+
+  // 对齐到页边界（实验允许非对齐，但内部按页处理）
+  uint64 end = addr + length;
+  addr = PGROUNDDOWN(addr);
+  end = PGROUNDUP(end);
+  length = end - addr;
+
+  struct proc *p = myproc();
+  int i;
+
+  // 查找匹配的 VMA（必须完全匹配起始或结束）
+  for(i = 0; i < NVMA; i++) {
+    if(!p->vma[i].used) continue;
+    uint64 vma_end = p->vma[i].addr + p->vma[i].len;
+
+    // 情况1: munmap 起始部分
+    if(addr == p->vma[i].addr && end <= vma_end) {
+      // 写回（如果是 MAP_SHARED + 可写）
+      if(p->vma[i].flags == MAP_SHARED && (p->vma[i].prot & PROT_WRITE)) {
+        // 注意：这里应遍历已映射的页并写回，但实验提示说“无需脏位”，直接写整个 range
+        filewrite(p->vma[i].vfile, addr, length);
+      }
+      uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+
+      // 调整 VMA
+      p->vma[i].addr = end;
+      p->vma[i].len -= length;
+      if(p->vma[i].len == 0) {
+        fileclose(p->vma[i].vfile);
+        p->vma[i].used = 0;
+      }
+      return 0;
+    }
+
+    // 情况2: munmap 结束部分
+    if(end == vma_end && addr >= p->vma[i].addr) {
+      if(p->vma[i].flags == MAP_SHARED && (p->vma[i].prot & PROT_WRITE)) {
+        filewrite(p->vma[i].vfile, addr, length);
+      }
+      uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+
+      p->vma[i].len -= length;
+      if(p->vma[i].len == 0) {
+        fileclose(p->vma[i].vfile);
+        p->vma[i].used = 0;
+      }
+      return 0;
+    }
+  }
+
+  return -1;  // 未找到匹配 VMA
+}

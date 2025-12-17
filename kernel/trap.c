@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "mmap.h" 
 
 struct spinlock tickslock;
 uint ticks;
@@ -38,6 +39,8 @@ usertrap(void)
 {
   int which_dev = 0;
 
+   int cause = r_scause(); 
+
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
@@ -67,7 +70,20 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  #ifdef LAB_MMAP
+  else if(cause == 13 || cause == 15) {
+    uint64 va = r_stval();
+    // 检查是否在合法用户空间（高于栈，低于 sz）
+    if(va >= p->sz || va < PGROUNDUP(p->trapframe->sp)) {
+      p->killed = 1;
+    } else {
+      if(mmap_handler(va, cause) != 0)
+        p->killed = 1;
+    }
+  }
+#endif
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

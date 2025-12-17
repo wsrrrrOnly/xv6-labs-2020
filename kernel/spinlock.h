@@ -1,4 +1,11 @@
 // Mutual exclusion lock.
+
+#ifndef _SPINLOCK_H_
+#define _SPINLOCK_H_
+
+#include "types.h"
+
+
 struct spinlock {
   uint locked;       // Is the lock held?
 
@@ -7,3 +14,4 @@ struct spinlock {
   struct cpu *cpu;   // The cpu holding the lock.
 };
 
+#endif // _SPINLOCK_H_
