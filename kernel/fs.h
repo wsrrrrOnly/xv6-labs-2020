@@ -5,6 +5,17 @@
 #define ROOTINO  1   // root i-number
 #define BSIZE 1024  // block size
 
+// Maximum number of direct block pointers in an inode
+#define NDIRECT 11
+// Number of addresses that fit in one block (for indirect blocks)
+#define NINDIRECT (BSIZE / sizeof(uint))
+// Number of addresses that fit in a double-indirect structure
+#define NDINDIRECT (NINDIRECT * NINDIRECT)
+// Total max file size in blocks
+#define MAXFILE (NDIRECT + NINDIRECT + NDINDIRECT)
+// Helper macro: number of block addresses per block
+#define NADDR_PER_BLOCK (BSIZE / sizeof(uint))
+
 // Disk layout:
 // [ boot block | super block | log | inode blocks |
 //                                          free bit map | data blocks]
@@ -24,9 +35,6 @@ struct superblock {
 
 #define FSMAGIC 0x10203040
 
-#define NDIRECT 12
-#define NINDIRECT (BSIZE / sizeof(uint))
-#define MAXFILE (NDIRECT + NINDIRECT)
 
 // On-disk inode structure
 struct dinode {
@@ -35,7 +43,7 @@ struct dinode {
   short minor;          // Minor device number (T_DEVICE only)
   short nlink;          // Number of links to inode in file system
   uint size;            // Size of file (bytes)
-  uint addrs[NDIRECT+1];   // Data block addresses
+  uint addrs[NDIRECT+2];   // Data block addresses
 };
 
 // Inodes per block.
