@@ -16,6 +16,8 @@
 #include "file.h"
 #include "fcntl.h"
 
+#define MAX_SYMLINK_DEPTH 10
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -309,6 +311,42 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    // Handle symbolic links
+if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+  char symlink_target[MAXPATH];
+  int depth = 0;
+
+  while(depth++ < MAX_SYMLINK_DEPTH){
+    // Read the target path from the symlink inode
+    int n = readi(ip, 0, (uint64)symlink_target, 0, MAXPATH - 1);
+    if(n <= 0){
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    symlink_target[n] = '\0';  // Ensure null termination
+
+    iunlockput(ip);  // Release current symlink inode
+
+    // Resolve the target path
+    if((ip = namei(symlink_target)) == 0){
+      end_op();
+      return -1;
+    }
+    ilock(ip);
+
+    // If it's not a symlink, break
+    if(ip->type != T_SYMLINK)
+      break;
+  }
+
+  // Too many levels of symbolic links
+  if(ip->type == T_SYMLINK){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+}
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -482,5 +520,37 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  // create() returns a locked inode
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  // Write the target path into the symlink's data block
+  // Note: writei expects kernel virtual address, so cast target to uint64
+  if(writei(ip, 0, (uint64)target, 0, strlen(target) + 1) != strlen(target) + 1){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
   return 0;
 }
