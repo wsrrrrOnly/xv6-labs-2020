@@ -380,59 +380,65 @@ bmap(struct inode *ip, uint bn)
   uint addr, *a;
   struct buf *bp;
 
-  // Direct blocks
+  // 直接块：前 NDIRECT 个块直接通过 inode 的 addrs 数组索引
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
-      ip->addrs[bn] = addr = balloc(ip->dev);
+      ip->addrs[bn] = addr = balloc(ip->dev);  // 若未分配，则分配一个新数据块
     return addr;
   }
   bn -= NDIRECT;
 
-  // Single indirect block
+  // 一级间接块：第 NDIRECT 个指针指向一个间接块，该块中存储多个数据块地址
   if(bn < NINDIRECT){
+    // 若一级间接块尚未分配，则分配一个新块作为一级间接块
     if((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
+    bp = bread(ip->dev, addr);  // 读取一级间接块
     a = (uint*)bp->data;
+    // 若目标数据块未分配，则在间接块中分配一个新数据块
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
-      log_write(bp);
+      log_write(bp);  // 标记该间接块已修改，需写回磁盘（日志记录）
     }
     brelse(bp);
     return addr;
   }
   bn -= NINDIRECT;
 
-  // Double indirect block
+  // 二级间接块：处理超出直接块和一级间接块范围的块号
   if(bn < NDINDIRECT) {
-    uint level2_idx = bn / NADDR_PER_BLOCK;   // index in double-indirect block
-    uint level1_idx = bn % NADDR_PER_BLOCK;   // index in single-indirect block
+    // 计算在二级间接结构中的位置：
+    // level2_idx：在二级间接块中的索引（指向某个一级间接块）
+    // level1_idx：在对应一级间接块中的索引（指向最终的数据块）
+    uint level2_idx = bn / NADDR_PER_BLOCK;
+    uint level1_idx = bn % NADDR_PER_BLOCK;
 
-    // Get or allocate double-indirect block (pointer at addrs[NDIRECT+1])
+    // 获取或分配二级间接块（位于 inode 的 addrs[NDIRECT + 1]）
     if((addr = ip->addrs[NDIRECT + 1]) == 0)
-      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);  // 分配二级间接块
+    bp = bread(ip->dev, addr);  // 读入二级间接块
     a = (uint*)bp->data;
 
-    // Get or allocate the single-indirect block pointed by double-indirect
+    // 获取或分配由二级间接块指向的某一个一级间接块
     if((addr = a[level2_idx]) == 0) {
-      a[level2_idx] = addr = balloc(ip->dev);
-      log_write(bp);  // mark dirty so it's written back
+      a[level2_idx] = addr = balloc(ip->dev);  // 分配新的一级间接块
+      log_write(bp);  // 修改了二级间接块内容，需记录日志
     }
-    brelse(bp);
+    brelse(bp);  // 释放二级间接块的缓冲区
 
-    // Now read the single-indirect block and get the final data block
+    // 读取刚刚分配/获取的一级间接块
     bp = bread(ip->dev, addr);
     a = (uint*)bp->data;
+    // 在该一级间接块中获取或分配最终的数据块
     if((addr = a[level1_idx]) == 0) {
-      a[level1_idx] = addr = balloc(ip->dev);
-      log_write(bp);
+      a[level1_idx] = addr = balloc(ip->dev);  // 分配最终的数据块
+      log_write(bp);  // 修改了一级间接块，需记录日志
     }
-    brelse(bp);
-    return addr;
+    brelse(bp);  // 释放一级间接块的缓冲区
+    return addr;  // 返回最终数据块的物理地址
   }
 
-  panic("bmap: out of range");
+  panic("bmap: out of range");  // 块号超出文件最大支持范围
 }
 
 // Truncate inode (discard contents).

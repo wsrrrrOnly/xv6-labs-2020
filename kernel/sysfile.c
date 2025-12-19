@@ -311,37 +311,33 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
-    // Handle symbolic links
+// 处理符号链接：若文件是符号链接且未设置 O_NOFOLLOW，则自动解析
 if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
   char symlink_target[MAXPATH];
   int depth = 0;
 
-  while(depth++ < MAX_SYMLINK_DEPTH){
-    // Read the target path from the symlink inode
-    int n = readi(ip, 0, (uint64)symlink_target, 0, MAXPATH - 1);
+  while(depth++ < MAX_SYMLINK_DEPTH){  // 最多解析 MAX_SYMLINK_DEPTH 层符号链接
+    int n = readi(ip, 0, (uint64)symlink_target, 0, MAXPATH - 1);  // 读取符号链接指向的目标路径
     if(n <= 0){
       iunlockput(ip);
       end_op();
       return -1;
     }
-    symlink_target[n] = '\0';  // Ensure null termination
+    symlink_target[n] = '\0';  // 确保字符串以 null 结尾
 
-    iunlockput(ip);  // Release current symlink inode
+    iunlockput(ip);  // 释放当前符号链接的 inode
 
-    // Resolve the target path
-    if((ip = namei(symlink_target)) == 0){
+    if((ip = namei(symlink_target)) == 0){  // 解析目标路径
       end_op();
       return -1;
     }
-    ilock(ip);
+    ilock(ip);  // 锁定新获取的 inode
 
-    // If it's not a symlink, break
-    if(ip->type != T_SYMLINK)
+    if(ip->type != T_SYMLINK)  // 若不是符号链接，则停止解析
       break;
   }
 
-  // Too many levels of symbolic links
-  if(ip->type == T_SYMLINK){
+  if(ip->type == T_SYMLINK){  // 超过最大深度仍为符号链接，报错
     iunlockput(ip);
     end_op();
     return -1;
@@ -530,27 +526,24 @@ sys_symlink(void)
   char target[MAXPATH], path[MAXPATH];
   struct inode *ip;
 
-  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)  // 从用户态读取目标路径和链接路径
     return -1;
 
-  begin_op();
+  begin_op();  // 开始文件系统事务
 
-  // create() returns a locked inode
-  ip = create(path, T_SYMLINK, 0, 0);
+  ip = create(path, T_SYMLINK, 0, 0);  // 创建类型为符号链接的新 inode（已加锁）
   if(ip == 0){
     end_op();
     return -1;
   }
 
-  // Write the target path into the symlink's data block
-  // Note: writei expects kernel virtual address, so cast target to uint64
-  if(writei(ip, 0, (uint64)target, 0, strlen(target) + 1) != strlen(target) + 1){
+  if(writei(ip, 0, (uint64)target, 0, strlen(target) + 1) != strlen(target) + 1){  // 将目标路径写入 inode 数据块
     iunlockput(ip);
     end_op();
     return -1;
   }
 
-  iunlockput(ip);
-  end_op();
+  iunlockput(ip);  // 解锁并释放 inode 引用
+  end_op();        // 结束事务
   return 0;
 }
